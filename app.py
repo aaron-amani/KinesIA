@@ -1,84 +1,104 @@
-from PyQt5 import QtGui
-from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout
-from PyQt5.QtGui import QPixmap
 import sys
 import cv2
-from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
+import dlib
 import numpy as np
+import joblib
+from imutils import face_utils
+from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QVBoxLayout
+from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtCore import QTimer,Qt
 
-
-class VideoThread(QThread):
-    change_pixmap_signal = pyqtSignal(np.ndarray)
-
-    def __init__(self):
+class FaceLandmarkDetector(QWidget):
+    def __init__(self, model_path, predictor_path):
         super().__init__()
-        self._run_flag = True
+        self.setWindowTitle("Emotion Detector")
+        self.setGeometry(100, 100, 640, 480)
 
-    def run(self):
-        # capture from web cam
-        cap = cv2.VideoCapture(0)
-        while self._run_flag:
-            ret, cv_img = cap.read()
-            if ret:
-                self.change_pixmap_signal.emit(cv_img)
-        # shut down capture system
-        cap.release()
+        # Layout setup
+        layout = QVBoxLayout()
+        self.setLayout(layout)
 
-    def stop(self):
-        """Sets run flag to False and waits for thread to finish"""
-        self._run_flag = False
-        self.wait()
+        self.label = QLabel(self)
+        self.label.setFixedSize(840, 680)
+        layout.addWidget(self.label)
 
+        # QLabel pour afficher l'émotion détectée
+        self.emotion_label = QLabel("Detected Emotion: None", self)
+        self.emotion_label.setStyleSheet("font-size: 18px; color: red; background-color: white;")
+        layout.addWidget(self.emotion_label, 0, alignment=Qt.AlignBottom)  # Alignement au bas
 
-class App(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Qt live label demo")
-        self.disply_width = 640
-        self.display_height = 480
-        # create the label that holds the image
-        self.image_label = QLabel(self)
-        self.image_label.resize(self.disply_width, self.display_height)
-        # create a text label
-        self.textLabel = QLabel('Webcam')
+        # Initialize face detection components
+        self.detector = dlib.get_frontal_face_detector()
+        self.predictor = dlib.shape_predictor(predictor_path)
+        self.model = joblib.load(model_path)
+        self.model_points = np.array([
+            (0.0, 0.0, 0.0), (0.0, -330.0, -65.0), 
+            (-225.0, 170.0, -135.0), (225.0, 170.0, -135.0), 
+            (-150.0, -150.0, -125.0), (150.0, -150.0, -125.0)
+        ], dtype=np.float32)
+        self.camera_matrix = np.array([[650, 0, 320], [0, 650, 240], [0, 0, 1]], dtype="double")
+        
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_frame)
+        self.timer.start(30)
 
-        # create a vertical box layout and add the two labels
-        vbox = QVBoxLayout()
-        vbox.addWidget(self.image_label)
-        vbox.addWidget(self.textLabel)
-        # set the vbox layout as the widgets layout
-        self.setLayout(vbox)
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        # create the video capture thread
-        self.thread = VideoThread()
-        # connect its signal to the update_image slot
-        self.thread.change_pixmap_signal.connect(self.update_image)
-        # start the thread
-        self.thread.start()
+    def update_frame(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            print("Failed to grab frame")
+            pass
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        faces = self.detector(gray, 0)
+        for rect in faces:
+            shape2 = self.predictor(gray, rect)
+            shape_np2 = face_utils.shape_to_np(shape2)
+            # Extract the face ROI and resize it
+            (x, y, w, h) = face_utils.rect_to_bb(rect)
+            face_roi = gray[y:y + h, x:x + w]
+            try :
+                face_roi_resized = cv2.resize(face_roi, (48, 48))
+                # Get landmarks from the resized face ROI
+                face_rect = dlib.rectangle(0, 0, 48, 48)  # Redefine face rect for the resized image
+                shape = self.predictor(face_roi_resized, face_rect)
+                shape_np = face_utils.shape_to_np(shape)
+                image_points = np.array([shape_np[30], shape_np[8], shape_np[36], shape_np[45], shape_np[48], shape_np[54]], dtype=np.float32)
+                dist_coeffs = np.zeros((4, 1))
+                _, rotation_vector, translation_vector = cv2.solvePnP(self.model_points, image_points, self.camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE)
+                emotion = self.predict_emotion(shape_np, rotation_vector, translation_vector)
+                for (x, y) in shape_np2:
+                    cv2.circle(frame, (x, y), 2, (0, 255, 0), -1)
+                cv2.putText(frame, f"Emotion: {emotion}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                self.emotion_label.setText(f"Detected Emotion: {emotion.capitalize()}")
+            except:
+                pass
 
-    def closeEvent(self, event):
-        self.thread.stop()
-        event.accept()
+        self.display_image(frame)
 
-
-
-    @pyqtSlot(np.ndarray)
-    def update_image(self, cv_img):
-        """Updates the image_label with a new opencv image"""
-        qt_img = self.convert_cv_qt(cv_img)
-        self.image_label.setPixmap(qt_img)
-    
-    def convert_cv_qt(self, cv_img):
-        """Convert from an opencv image to QPixmap"""
-        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+    def display_image(self, frame):
+        """ Convert image to RGB and display it. """
+        rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb_image.shape
         bytes_per_line = ch * w
-        convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-        p = convert_to_Qt_format.scaled(self.disply_width, self.display_height, Qt.KeepAspectRatio)
-        return QPixmap.fromImage(p)
+        convert_to_Qt_format = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        p = convert_to_Qt_format.scaled(self.label.width(), self.label.height(), aspectRatioMode = 1)
+        self.label.setPixmap(QPixmap.fromImage(p))
+
+    def predict_emotion(self, landmarks, rotation_vector, translation_vector):
+        pose_features = np.concatenate((rotation_vector.flatten(), translation_vector.flatten()))
+        all_features = np.concatenate((landmarks.flatten(), pose_features))
+        all_features = all_features.reshape(1, -1)
+        return self.model.predict(all_features)[0]
     
-if __name__=="__main__":
+    def closeEvent(self, event):
+        self.cap.release()
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    a = App()
-    a.show()
+    window = FaceLandmarkDetector("emotion_classifier.pkl", "shape_predictor_68_face_landmarks.dat")
+    window.show()
     sys.exit(app.exec_())
