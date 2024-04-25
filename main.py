@@ -10,16 +10,18 @@ import training
 
 
 # Directory containing the dataset organized by emotion
-file_path_list = list(pathlib.Path("datas").glob('*/*/*.jpg'))
+file_path_list = list(pathlib.Path("datas_ck+mod").glob('*/*.png')) + list(pathlib.Path("datas_ck+mod").glob('*/*.jpg'))
+file_label_list = [str(file_path).split('/')[1] for file_path  in file_path_list]
+
 print(f"Number of files: {len(file_path_list)}")
+print(list(pathlib.Path("datas_ck+mod").glob('*/*.jpg')))
 
-
-datasetcsv_path = "features_with_pose.csv"
+datasetcsv_path = "features.csv"
 features = None
 
 # Save features and labels to a CSV file for later use
 if not pathlib.Path(datasetcsv_path).exists():
-    features = encode.prepare_datas(file_path_list)
+    features = encode.prepare_datas(file_path_list, file_label_list)
     features.to_csv(datasetcsv_path, index=False)
     print(f"Data extraction and pose estimation complete. Features saved to '{datasetcsv_path}'.")
 else:
@@ -31,8 +33,21 @@ X_train, X_test, y_train, y_test = encode.data_prep_split(features)
 y_all = list(set(features['emotion']))
 print(y_all)
 
+#param_grid = {
+    #    'n_estimators': [100, 200, 300],
+    #    'max_depth': [None, 10, 20],
+    #    'min_samples_split': [2, 5, 10],
+    #    'min_samples_leaf': [1, 2, 4]
+    #}
+
+param_grid = {
+    'n_neighbors': [10, 50, 100],
+    'weights': ['uniform', 'distance'],
+    'algorithm': ['ball_tree', 'kd_tree', 'brute'],
+}
+
 #model = RandomForestClassifier(random_state=42)
-model = training.train_model(KNeighborsClassifier()
+model = training.train_model(KNeighborsClassifier(), param_grid
                             , X_train, X_test, y_train, y_test)
 
 # Predict on the test set

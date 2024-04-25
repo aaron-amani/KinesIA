@@ -57,16 +57,17 @@ def extract_landmarks_and_pose(image_path):
 
     return best_points
 
-def prepare_datas(file_path_list) -> pd.DataFrame:
+def prepare_datas(file_path_list, file_label_list) -> pd.DataFrame:
     """ Organize data into a DataFrame with labels and poses """
     datas = []
     labels = []
+
 
     for i in tqdm(range(len(file_path_list))):
         landmarks = extract_landmarks_and_pose(str(file_path_list[i]))
         if landmarks != []:
             datas.append(landmarks)
-            labels.append(str(file_path_list[i]).split('/')[2])
+            labels.append(file_label_list[i])
 
     feature_data = pd.DataFrame(datas)
     #pose_data = pd.DataFrame(all_poses, columns=['rot_x', 'rot_y', 'rot_z', 'trans_x', 'trans_y', 'trans_z'])
